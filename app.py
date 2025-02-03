@@ -10,7 +10,24 @@ from PyPDF2 import PdfReader
 from langchain_groq import ChatGroq
 
 app = Flask(__name__)
-CORS(app)
+
+# Configuration détaillée des CORS
+CORS(app, resources={
+    r"/*": {
+        "origins": "*",
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type"],
+        "supports_credentials": True
+    }
+})
+
+# Gestion explicite des CORS pour toutes les réponses
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    return response
 
 # Configurations
 SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
@@ -70,9 +87,13 @@ def test_env():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route("/query", methods=["POST"])
+@app.route("/query", methods=["POST", "OPTIONS"])
 def query_documents():
     """Point de terminaison principal pour interroger les documents"""
+    # Gestion explicite des requêtes OPTIONS
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"}), 200
+
     try:
         data = request.get_json()
         if not data:
@@ -100,6 +121,7 @@ def query_documents():
         # Extraire le contenu de tous les PDFs
         all_text = ""
         for file in files:
+            print(f"Processing file: {file['name']}")  # Debug log
             all_text += get_pdf_content(service, file['id'])
 
         if not all_text.strip():
@@ -129,6 +151,7 @@ def query_documents():
         })
 
     except Exception as e:
+        print(f"Error in query_documents: {str(e)}")  # Debug log
         return jsonify({
             "error": str(e),
             "status": "error"
