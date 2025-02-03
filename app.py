@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify
-from flask_cors import CORS
+from flask_cors import CORS, cross_origin
 import os
 import json
 from google.oauth2 import service_account
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # Configuration CORS plus simple
-cors = CORS(app)
+CORS(app)
 app.config['CORS_HEADERS'] = 'Content-Type'
 
 def init_drive_service():
@@ -39,7 +39,7 @@ def get_pdf_content(service, file_id):
         downloader = MediaIoBaseDownload(file, request)
         done = False
         while not done:
-            _, done = downloader.next_chunk()  # Correction de la syntaxe ici
+            _, done = downloader.next_chunk()
         
         file.seek(0)
         pdf_document = fitz.open(stream=file.read(), filetype="pdf")
@@ -54,16 +54,20 @@ def get_pdf_content(service, file_id):
             text.append(page.get_text())
         
         pdf_document.close()
-        return "\n\n".join(text)  # Joins all pages with double newlines
+        return "\n\n".join(text)
     except Exception as e:
         logger.error(f"Error extracting PDF content: {str(e)}")
         raise
 
 @app.route('/extract-text', methods=['POST', 'OPTIONS'])
-@cross_origin()
 def extract_text():
+    # Gestion des CORS pour OPTIONS
     if request.method == "OPTIONS":
-        return {"message": "ok"}, 200
+        response = jsonify({"status": "ok"})
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+        response.headers.add('Access-Control-Allow-Methods', 'POST')
+        return response
 
     try:
         data = request.get_json()
@@ -78,23 +82,28 @@ def extract_text():
 
         logger.info(f"Extracted text length: {len(text)}")
 
-        return jsonify({
+        response = jsonify({
             "status": "success",
-            "text": text,  # Sending complete text
+            "text": text,
             "total_length": len(text)
         })
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        return response
 
     except Exception as e:
         logger.error(f"Error in extract_text: {str(e)}")
-        return jsonify({
+        error_response = jsonify({
             "status": "error",
             "error": str(e)
-        }), 500
+        })
+        error_response.headers.add('Access-Control-Allow-Origin', '*')
+        return error_response, 500
 
 @app.route('/')
-@cross_origin()
 def home():
-    return jsonify({"status": "API is running"})
+    response = jsonify({"status": "API is running"})
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    return response
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
