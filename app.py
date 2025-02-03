@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify
-from flask_cors import CORS
+from flask_cors import CORS, cross_origin
 import os
 import json
 from google.oauth2 import service_account
@@ -9,51 +9,16 @@ import io
 from PyPDF2 import PdfReader
 
 app = Flask(__name__)
-CORS(app)
-
-@app.route('/test', methods=['GET'])
-def test():
-    return jsonify({"message": "Test successful"})
-
-@app.route("/list-pdfs", methods=['POST'])
-def list_pdfs():
-    try:
-        data = request.get_json()
-        folder_id = data.get('folder_id')
-        
-        service = init_drive_service()
-        
-        results = service.files().list(
-            q=f"'{folder_id}' in parents and mimeType='application/pdf'",
-            fields="files(id, name)"
-        ).execute()
-
-        files = results.get('files', [])
-        return jsonify({
-            "status": "success",
-            "files": [{"id": f["id"], "name": f["name"]} for f in files]
-        })
-
-    except Exception as e:
-        return jsonify({"status": "error", "error": str(e)}), 500
-
-@app.route("/extract-text", methods=['POST'])
-def extract_text():
-    try:
-        data = request.get_json()
-        file_id = data.get('file_id')
-        
-        service = init_drive_service()
-        text = get_pdf_content(service, file_id)
-
-        return jsonify({
-            "status": "success",
-            "text": text[:1000],  # Retourne les 1000 premiers caractères pour test
-            "total_length": len(text)
-        })
-
-    except Exception as e:
-        return jsonify({"status": "error", "error": str(e)}), 500
+CORS(app, resources={
+    r"/*": {
+        "origins": "*",
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type"],
+        "expose_headers": ["Content-Type"],
+        "max_age": 600,
+        "supports_credentials": False
+    }
+})
 
 def init_drive_service():
     credentials_json = os.getenv("GOOGLE_CREDENTIALS")
@@ -76,6 +41,52 @@ def get_pdf_content(service, file_id):
     for page in reader.pages:
         text += page.extract_text() or ""
     return text
+
+@app.route('/test-cors', methods=['OPTIONS'])
+@cross_origin()
+def handle_options():
+    return '', 200
+
+@app.route('/extract-text', methods=['POST', 'OPTIONS'])
+@cross_origin()
+def extract_text():
+    if request.method == "OPTIONS":
+        return '', 200
+        
+    try:
+        data = request.get_json()
+        if not data or 'file_id' not in data:
+            return jsonify({"error": "No file_id provided"}), 400
+            
+        file_id = data['file_id']
+        
+        # Test de connexion à Drive
+        service = init_drive_service()
+        if not service:
+            return jsonify({"error": "Failed to initialize Drive service"}), 500
+            
+        # Extraction du texte
+        text = get_pdf_content(service, file_id)
+        if not text:
+            return jsonify({"error": "No text extracted"}), 404
+
+        return jsonify({
+            "status": "success",
+            "text": text[:1000],
+            "total_length": len(text)
+        })
+
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "error": str(e),
+            "details": "Error during text extraction"
+        }), 500
+
+@app.route('/test', methods=['GET'])
+@cross_origin()
+def test():
+    return jsonify({"message": "Test successful"})
 
 if __name__ == "__main__":
     app.run(debug=True)
