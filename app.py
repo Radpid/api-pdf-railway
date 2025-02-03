@@ -11,18 +11,20 @@ from langchain_groq import ChatGroq
 
 app = Flask(__name__)
 
-# Configuration CORS simplifiée
-CORS(app)
-
-@app.route("/")
-def home():
-    return jsonify({
-        "status": "running",
-        "message": "Welcome to PDF Analysis API"
-    })
+# Configuration CORS
+CORS(app, resources={
+    r"/*": {
+        "origins": "*",
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type"]
+    }
+})
 
 @app.route("/query", methods=["POST", "OPTIONS"])
 def query_documents():
+    from flask import request  # Importation locale de request
+    
+    # Gestion explicite des requêtes OPTIONS
     if request.method == "OPTIONS":
         response = jsonify({"status": "ok"})
         response.headers.add("Access-Control-Allow-Origin", "*")
@@ -31,6 +33,7 @@ def query_documents():
         return response
 
     try:
+        # Pour les requêtes POST
         data = request.get_json()
         if not data:
             return jsonify({"error": "No JSON data provided"}), 400
@@ -65,9 +68,9 @@ def query_documents():
         # Extraire le texte
         all_text = ""
         for file in files:
-            request = service.files().get_media(fileId=file['id'])
+            request_file = service.files().get_media(fileId=file['id'])
             file_content = io.BytesIO()
-            downloader = MediaIoBaseDownload(file_content, request)
+            downloader = MediaIoBaseDownload(file_content, request_file)
             done = False
             while done is False:
                 _, done = downloader.next_chunk()
@@ -93,16 +96,30 @@ def query_documents():
 
         response = llm.invoke(prompt)
 
-        return jsonify({
+        # Retourner la réponse avec les headers CORS
+        api_response = jsonify({
             "response": response.content,
             "status": "success"
         })
+        api_response.headers.add("Access-Control-Allow-Origin", "*")
+        return api_response
 
     except Exception as e:
-        return jsonify({
+        error_response = jsonify({
             "error": str(e),
             "status": "error"
-        }), 500
+        })
+        error_response.headers.add("Access-Control-Allow-Origin", "*")
+        return error_response, 500
+
+@app.route("/")
+def home():
+    response = jsonify({
+        "status": "running",
+        "message": "Welcome to PDF Analysis API"
+    })
+    response.headers.add("Access-Control-Allow-Origin", "*")
+    return response
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
