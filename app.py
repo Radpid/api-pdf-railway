@@ -8,33 +8,51 @@ from googleapiclient.http import MediaIoBaseDownload
 import io
 from PyPDF2 import PdfReader
 from langchain_groq import ChatGroq
+import logging
+
+# Configuration du logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Configuration CORS
-CORS(app, resources={
+# Configuration CORS plus restrictive
+cors = CORS(app, resources={
     r"/*": {
-        "origins": "*",
+        "origins": ["http://localhost", "http://127.0.0.1", "http://localhost:5000"],
         "methods": ["GET", "POST", "OPTIONS"],
-        "allow_headers": ["Content-Type"]
+        "allow_headers": ["Content-Type", "Authorization", "Access-Control-Allow-Headers"],
+        "supports_credentials": True,
+        "max_age": 3600
     }
 })
 
+# Middleware pour les headers CORS
+@app.after_request
+def after_request(response):
+    origin = request.headers.get('Origin', '*')
+    if origin in ["http://localhost", "http://127.0.0.1", "http://localhost:5000"]:
+        response.headers.add('Access-Control-Allow-Origin', origin)
+    else:
+        response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    response.headers.add('Access-Control-Allow-Credentials', 'true')
+    return response
+
 @app.route("/query", methods=["POST", "OPTIONS"])
 def query_documents():
-    from flask import request  # Importation locale de request
-    
-    # Gestion explicite des requêtes OPTIONS
+    logger.debug(f"Received request: {request.method}")
+    logger.debug(f"Headers: {request.headers}")
+
     if request.method == "OPTIONS":
-        response = jsonify({"status": "ok"})
-        response.headers.add("Access-Control-Allow-Origin", "*")
-        response.headers.add("Access-Control-Allow-Headers", "Content-Type")
-        response.headers.add("Access-Control-Allow-Methods", "POST, OPTIONS")
-        return response
+        logger.debug("Handling OPTIONS request")
+        return "", 204
 
     try:
-        # Pour les requêtes POST
         data = request.get_json()
+        logger.debug(f"Received data: {data}")
+
         if not data:
             return jsonify({"error": "No JSON data provided"}), 400
 
@@ -68,6 +86,7 @@ def query_documents():
         # Extraire le texte
         all_text = ""
         for file in files:
+            logger.debug(f"Processing file: {file['name']}")
             request_file = service.files().get_media(fileId=file['id'])
             file_content = io.BytesIO()
             downloader = MediaIoBaseDownload(file_content, request_file)
@@ -95,32 +114,27 @@ def query_documents():
         """
 
         response = llm.invoke(prompt)
+        logger.debug("Successfully got response from Groq")
 
-        # Retourner la réponse avec les headers CORS
-        api_response = jsonify({
+        return jsonify({
             "response": response.content,
             "status": "success"
         })
-        api_response.headers.add("Access-Control-Allow-Origin", "*")
-        return api_response
 
     except Exception as e:
-        error_response = jsonify({
+        logger.error(f"Error in query_documents: {str(e)}", exc_info=True)
+        return jsonify({
             "error": str(e),
             "status": "error"
-        })
-        error_response.headers.add("Access-Control-Allow-Origin", "*")
-        return error_response, 500
+        }), 500
 
 @app.route("/")
 def home():
-    response = jsonify({
+    return jsonify({
         "status": "running",
         "message": "Welcome to PDF Analysis API"
     })
-    response.headers.add("Access-Control-Allow-Origin", "*")
-    return response
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port, debug=True)
