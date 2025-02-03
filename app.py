@@ -5,7 +5,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 import io
-import pypdf2
+import PyPDF2
 from langchain_groq import ChatGroq
 
 app = Flask(__name__)
@@ -32,7 +32,7 @@ def get_pdf_content(service, file_id):
         _, done = downloader.next_chunk()
     
     file.seek(0)
-    reader = pypdf2.PdfReader(file)
+    reader = PyPDF2.PdfReader(file)  # Notez PdfReader au lieu de PdfFileReader
     text = ""
     for page in reader.pages:
         text += page.extract_text()
