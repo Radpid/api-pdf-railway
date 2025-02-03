@@ -11,88 +11,24 @@ from langchain_groq import ChatGroq
 
 app = Flask(__name__)
 
-# Configuration détaillée des CORS
-CORS(app, resources={
-    r"/*": {
-        "origins": "*",
-        "methods": ["GET", "POST", "OPTIONS"],
-        "allow_headers": ["Content-Type"],
-        "supports_credentials": True
-    }
-})
-
-# Gestion explicite des CORS pour toutes les réponses
-@app.after_request
-def after_request(response):
-    response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
-    return response
-
-# Configurations
-SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
-
-def init_drive_service():
-    """Initialise le service Google Drive"""
-    try:
-        credentials_json = os.getenv("GOOGLE_CREDENTIALS")
-        if not credentials_json:
-            raise ValueError("Google credentials not found in environment variables")
-        
-        credentials_dict = json.loads(credentials_json)
-        credentials = service_account.Credentials.from_service_account_info(
-            credentials_dict, scopes=SCOPES)
-        
-        return build('drive', 'v3', credentials=credentials)
-    except Exception as e:
-        raise Exception(f"Failed to initialize Drive service: {str(e)}")
-
-def get_pdf_content(service, file_id):
-    """Extrait le texte d'un fichier PDF depuis Google Drive"""
-    try:
-        request = service.files().get_media(fileId=file_id)
-        file = io.BytesIO()
-        downloader = MediaIoBaseDownload(file, request)
-        done = False
-        while done is False:
-            _, done = downloader.next_chunk()
-        
-        file.seek(0)
-        reader = PdfReader(file)
-        text = ""
-        for page in reader.pages:
-            text += page.extract_text() or ""
-        return text
-    except Exception as e:
-        raise Exception(f"Failed to extract PDF content: {str(e)}")
+# Configuration CORS simplifiée
+CORS(app)
 
 @app.route("/")
 def home():
-    """Point de terminaison racine pour vérifier que l'API fonctionne"""
     return jsonify({
         "status": "running",
         "message": "Welcome to PDF Analysis API"
     })
 
-@app.route("/test")
-def test_env():
-    """Point de terminaison de test pour vérifier la configuration"""
-    try:
-        creds = json.loads(os.getenv("GOOGLE_CREDENTIALS", "{}"))
-        groq_key = os.getenv("GROQ_API_KEY")
-        return jsonify({
-            "google_creds_valid": bool(creds),
-            "groq_key_present": bool(groq_key)
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
 @app.route("/query", methods=["POST", "OPTIONS"])
 def query_documents():
-    """Point de terminaison principal pour interroger les documents"""
-    # Gestion explicite des requêtes OPTIONS
     if request.method == "OPTIONS":
-        return jsonify({"status": "ok"}), 200
+        response = jsonify({"status": "ok"})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type")
+        response.headers.add("Access-Control-Allow-Methods", "POST, OPTIONS")
+        return response
 
     try:
         data = request.get_json()
@@ -105,10 +41,18 @@ def query_documents():
         if not query or not folder_id:
             return jsonify({"error": "Missing required fields: query and folder_id"}), 400
 
-        # Initialiser le service Drive
-        service = init_drive_service()
+        # Initialiser Drive
+        credentials_json = os.getenv("GOOGLE_CREDENTIALS")
+        if not credentials_json:
+            return jsonify({"error": "Google credentials not found"}), 500
 
-        # Récupérer tous les PDF du dossier
+        credentials_dict = json.loads(credentials_json)
+        credentials = service_account.Credentials.from_service_account_info(
+            credentials_dict, scopes=['https://www.googleapis.com/auth/drive.readonly'])
+        
+        service = build('drive', 'v3', credentials=credentials)
+
+        # Récupérer les PDFs
         results = service.files().list(
             q=f"'{folder_id}' in parents and mimeType='application/pdf'",
             fields="files(id, name)"
@@ -116,24 +60,29 @@ def query_documents():
 
         files = results.get('files', [])
         if not files:
-            return jsonify({"error": "No PDF files found in the specified folder"}), 404
+            return jsonify({"error": "No PDF files found"}), 404
 
-        # Extraire le contenu de tous les PDFs
+        # Extraire le texte
         all_text = ""
         for file in files:
-            print(f"Processing file: {file['name']}")  # Debug log
-            all_text += get_pdf_content(service, file['id'])
+            request = service.files().get_media(fileId=file['id'])
+            file_content = io.BytesIO()
+            downloader = MediaIoBaseDownload(file_content, request)
+            done = False
+            while done is False:
+                _, done = downloader.next_chunk()
+            
+            file_content.seek(0)
+            reader = PdfReader(file_content)
+            for page in reader.pages:
+                all_text += page.extract_text() or ""
 
-        if not all_text.strip():
-            return jsonify({"error": "No text content found in PDFs"}), 404
-
-        # Configuration de Groq
+        # Utiliser Groq
         llm = ChatGroq(
             groq_api_key=os.getenv("GROQ_API_KEY"),
             model_name="mixtral-8x7b-32768"
         )
 
-        # Créer le prompt
         prompt = f"""Utilise le contexte suivant pour répondre à la question. 
         Si tu ne trouves pas la réponse dans le contexte, dis-le simplement.
         
@@ -142,7 +91,6 @@ def query_documents():
         Question: {query}
         """
 
-        # Obtenir la réponse
         response = llm.invoke(prompt)
 
         return jsonify({
@@ -151,7 +99,6 @@ def query_documents():
         })
 
     except Exception as e:
-        print(f"Error in query_documents: {str(e)}")  # Debug log
         return jsonify({
             "error": str(e),
             "status": "error"
